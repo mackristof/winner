@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+
+docker run --rm -v "$PWD":/usr/src/myapp -w /usr/src/myapp -e GOOS=linux -e GOARCH=386 golang:1.7.1 go build -ldflags "-s -w" winner.go
+
+cp /etc/ssl/certs/ca-certificates.crt ./

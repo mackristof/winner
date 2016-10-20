@@ -1,5 +1,5 @@
 FROM scratch
 ADD ca-certificates.crt /etc/ssl/certs/
-ADD winner /
+ADD winner /app/
 EXPOSE 8000
-CMD ["/winner"]
+CMD ["/app/winner"]
