@@ -53,12 +53,17 @@ func winner(w http.ResponseWriter, r *http.Request) {
 	res := lastRequest{}
 	json.Unmarshal(body, &res)
 	//fmt.Printf("getting eventId from eventbrite %+v\n", res.Events[0].Id)
+	if len(res.Events) == 0 {
+		io.WriteString(w, "no event available")
+		return
+	}
 	var i = 1
 	var result = []attendee{}
 	for i != 0 {
 		resp, err := http.Get("https://www.eventbriteapi.com/v3/events/" + res.Events[0].Id + "/attendees/?page=" + strconv.Itoa(i) + "&token=" + token)
 		if err != nil {
-			panic(err)
+			io.WriteString(w, err.Error())
+			return
 		}
 		defer resp.Body.Close()
 		body, err := ioutil.ReadAll(resp.Body)
