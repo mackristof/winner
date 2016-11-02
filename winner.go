@@ -75,6 +75,7 @@ func winner(w http.ResponseWriter, r *http.Request) {
 	}
 	nbWinnerS := r.URL.Query().Get("n")
 	nbWinner, err := strconv.Atoi(nbWinnerS)
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	if err != nil {
 		io.WriteString(w, err.Error())
 		return
