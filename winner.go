@@ -9,6 +9,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/heppu/simple-cors"
 )
 
 type event struct {
@@ -73,15 +75,19 @@ func winner(w http.ResponseWriter, r *http.Request) {
 		result = append(result, res.Attendees...)
 		i = res.Pagination.PageCount - res.Pagination.PageNumber
 	}
-	nbWinnerS := r.URL.Query().Get("n")
+	nbWinnerS := r.URL.Query().Get("nb")
+	if len(nbWinnerS) == 0 {
+		http.Error(w, "bad Request", http.StatusBadRequest)
+		return
+	}
 	nbWinner, err := strconv.Atoi(nbWinnerS)
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+
 	if err != nil {
 		io.WriteString(w, err.Error())
 		return
 	}
 	if nbWinner < int(0) || nbWinner > len(result) {
-		io.WriteString(w, "request < 0 or > "+strconv.Itoa(len(result)))
+		http.Error(w, "request < 0 or > "+strconv.Itoa(len(result)), http.StatusBadRequest)
 		return
 	}
 	//fmt.Printf("attendees final count : %+v\n", len(result))
@@ -100,6 +106,7 @@ func winner(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	http.HandleFunc("/", winner)
-	http.ListenAndServe(":8000", nil)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/winner", winner)
+	http.ListenAndServe(":8000", cors.CORS(mux))
 }
