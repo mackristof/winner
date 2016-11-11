@@ -124,9 +124,12 @@ func winner(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad Request", http.StatusBadRequest)
 		return
 	}
-	if nbWinner < int(0) || nbWinner > len(result) {
-		http.Error(w, "request < 0 or > "+strconv.Itoa(len(result)), http.StatusBadRequest)
+	if nbWinner < int(0) {
+		http.Error(w, "request < 0 ", http.StatusBadRequest)
 		return
+	}
+	if nbWinner > len(result) {
+		nbWinner = len(result)
 	}
 	var winners = []profile{}
 	for nbWinner != 0 {
