@@ -54,7 +54,7 @@ func cors(next http.Handler) http.Handler {
 }
 
 type event struct {
-	Id string `json:"id"`
+	ID string `json:"id"`
 }
 
 type lastRequest struct {
@@ -84,9 +84,9 @@ type eventAttend struct {
 func winner(w http.ResponseWriter, r *http.Request) {
 
 	token := os.Getenv("TOKEN")
-	orgaId := os.Getenv("ORGA_ID")
-	//fmt.Println("https://www.eventbriteapi.com/v3/events/search/?token=" + token + "&organizer.id=" + orgaId)
-	resp, err := http.Get("https://www.eventbriteapi.com/v3/events/search/?token=" + token + "&organizer.id=" + orgaId)
+	orgaID := os.Getenv("ORGA_ID")
+
+	resp, err := http.Get("https://www.eventbriteapi.com/v3/events/search/?token=" + token + "&organizer.id=" + orgaID)
 	if err != nil {
 		panic(err)
 	}
@@ -94,7 +94,6 @@ func winner(w http.ResponseWriter, r *http.Request) {
 	body, err := ioutil.ReadAll(resp.Body)
 	res := lastRequest{}
 	json.Unmarshal(body, &res)
-	//fmt.Printf("getting eventId from eventbrite %+v\n", res.Events[0].Id)
 	if len(res.Events) == 0 {
 		io.WriteString(w, "no event available")
 		return
@@ -102,7 +101,7 @@ func winner(w http.ResponseWriter, r *http.Request) {
 	var i = 1
 	var result = []attendee{}
 	for i != 0 {
-		resp, err := http.Get("https://www.eventbriteapi.com/v3/events/" + res.Events[0].Id + "/attendees/?page=" + strconv.Itoa(i) + "&token=" + token)
+		resp, err := http.Get("https://www.eventbriteapi.com/v3/events/" + res.Events[0].ID + "/attendees/?page=" + strconv.Itoa(i) + "&token=" + token)
 		if err != nil {
 			io.WriteString(w, err.Error())
 			return
@@ -111,7 +110,6 @@ func winner(w http.ResponseWriter, r *http.Request) {
 		body, err := ioutil.ReadAll(resp.Body)
 		res := eventAttend{}
 		json.Unmarshal(body, &res)
-		//fmt.Printf("attendees count : %+v\n", len(res.Attendees))
 		result = append(result, res.Attendees...)
 		i = res.Pagination.PageCount - res.Pagination.PageNumber
 	}
@@ -123,14 +121,13 @@ func winner(w http.ResponseWriter, r *http.Request) {
 	nbWinner, err := strconv.Atoi(nbWinnerS)
 
 	if err != nil {
-		io.WriteString(w, err.Error())
+		http.Error(w, "bad Request", http.StatusBadRequest)
 		return
 	}
 	if nbWinner < int(0) || nbWinner > len(result) {
 		http.Error(w, "request < 0 or > "+strconv.Itoa(len(result)), http.StatusBadRequest)
 		return
 	}
-	//fmt.Printf("attendees final count : %+v\n", len(result))
 	var winners = []profile{}
 	for nbWinner != 0 {
 		s1 := rand.NewSource(time.Now().UnixNano())
@@ -147,6 +144,6 @@ func winner(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/winner", winner)
+	mux.HandleFunc("/winners", winner)
 	http.ListenAndServe(":8000", cors(mux))
 }
