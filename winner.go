@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"math/rand"
@@ -25,6 +27,8 @@ const (
 	// If you want to expose some other headers add it here
 	headers string = "Accept, Accept-Encoding, Authorization, Content-Length, Content-Type, X-CSRF-Token"
 )
+
+var result []attendee
 
 // Handler will allow cross-origin HTTP requests
 func cors(next http.Handler) http.Handler {
@@ -64,7 +68,7 @@ type lastRequest struct {
 type profile struct {
 	LastName  string `json:"first_name"`
 	FirstName string `json:"last_name"`
-	Email     string `json:"email"`
+	//	Email     string `json:"email"`
 }
 
 type attendee struct {
@@ -81,8 +85,7 @@ type eventAttend struct {
 	Pagination pagination `json:"pagination"`
 }
 
-func winner(w http.ResponseWriter, r *http.Request) {
-
+func getAttentees() ([]attendee, error) {
 	token := os.Getenv("TOKEN")
 	orgaID := os.Getenv("ORGA_ID")
 
@@ -95,16 +98,14 @@ func winner(w http.ResponseWriter, r *http.Request) {
 	res := lastRequest{}
 	json.Unmarshal(body, &res)
 	if len(res.Events) == 0 {
-		io.WriteString(w, "no event available")
-		return
+		return nil, errors.New("no event available")
 	}
 	var i = 1
 	var result = []attendee{}
 	for i != 0 {
 		resp, err := http.Get("https://www.eventbriteapi.com/v3/events/" + res.Events[0].ID + "/attendees/?page=" + strconv.Itoa(i) + "&token=" + token)
 		if err != nil {
-			io.WriteString(w, err.Error())
-			return
+			return nil, err
 		}
 		defer resp.Body.Close()
 		body, err := ioutil.ReadAll(resp.Body)
@@ -113,6 +114,11 @@ func winner(w http.ResponseWriter, r *http.Request) {
 		result = append(result, res.Attendees...)
 		i = res.Pagination.PageCount - res.Pagination.PageNumber
 	}
+	return result, nil
+}
+
+func winner(w http.ResponseWriter, r *http.Request) {
+
 	nbWinnerS := r.URL.Query().Get("nb")
 	if len(nbWinnerS) == 0 {
 		http.Error(w, "bad Request", http.StatusBadRequest)
@@ -128,24 +134,36 @@ func winner(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "request < 0 ", http.StatusBadRequest)
 		return
 	}
+	var winners = []profile{}
 	if nbWinner > len(result) {
 		nbWinner = len(result)
+		for nbWinner != 0 {
+			winners = append(winners, result[nbWinner-1].Profile)
+			nbWinner--
+		}
+	} else {
+		for nbWinner != 0 {
+			s1 := rand.NewSource(time.Now().UnixNano())
+			r1 := rand.New(s1)
+			index := r1.Intn(len(result))
+			winners = append(winners, result[index].Profile)
+			nbWinner--
+		}
 	}
-	var winners = []profile{}
-	for nbWinner != 0 {
-		s1 := rand.NewSource(time.Now().UnixNano())
-		r1 := rand.New(s1)
-		index := r1.Intn(len(result))
-		winners = append(winners, result[index].Profile)
-		nbWinner--
-	}
-
 	winner, _ := json.Marshal(winners)
 	w.Header().Set("Content-Type", "application/json")
 	io.WriteString(w, string(winner))
 }
 
 func main() {
+	result, _ = getAttentees()
+	ticker := time.NewTicker(time.Hour)
+	go func() {
+		for t := range ticker.C {
+			fmt.Println("renew cache at ", t)
+			result, _ = getAttentees()
+		}
+	}()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/winners", winner)
 	http.ListenAndServe(":8000", cors(mux))
