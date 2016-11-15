@@ -29,6 +29,7 @@ const (
 )
 
 var result []attendee
+var winnerPreFetch = make([]string, 10)
 
 // Handler will allow cross-origin HTTP requests
 func cors(next http.Handler) http.Handler {
@@ -68,7 +69,6 @@ type lastRequest struct {
 type profile struct {
 	LastName  string `json:"first_name"`
 	FirstName string `json:"last_name"`
-	//	Email     string `json:"email"`
 }
 
 type attendee struct {
@@ -117,8 +117,44 @@ func getAttentees() ([]attendee, error) {
 	return result, nil
 }
 
-func winner(w http.ResponseWriter, r *http.Request) {
+func isPresent(index int, randoms []int) bool {
+	for i := 0; i < len(randoms); i++ {
+		if randoms[i] == index {
+			return true
+		}
+	}
+	return false
+}
 
+func getRandoms(nbWinner int) []int {
+	count := nbWinner
+	var randoms = []int{}
+	for count != 0 {
+		s1 := rand.NewSource(time.Now().UnixNano())
+		r1 := rand.New(s1)
+		index := r1.Intn(nbWinner)
+		exist := isPresent(index, randoms)
+		if !exist {
+			count--
+			randoms = append(randoms, index)
+		}
+	}
+	return randoms
+}
+
+func preFetchWinner(nbWinner int) (string, error) {
+	var winnersProfile = []profile{}
+	randoms := getRandoms(len(result))
+	for nbWinner != 0 {
+		winnersProfile = append(winnersProfile, result[randoms[nbWinner-1]].Profile)
+		nbWinner--
+	}
+	podium, _ := json.Marshal(winnersProfile)
+	return string(podium), nil
+}
+
+func winner(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
 	nbWinnerS := r.URL.Query().Get("nb")
 	if len(nbWinnerS) == 0 {
 		http.Error(w, "bad Request", http.StatusBadRequest)
@@ -134,29 +170,24 @@ func winner(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "request < 0 ", http.StatusBadRequest)
 		return
 	}
-	var winners = []profile{}
-	if nbWinner > len(result) {
-		nbWinner = len(result)
-		for nbWinner != 0 {
-			winners = append(winners, result[nbWinner-1].Profile)
-			nbWinner--
-		}
-	} else {
-		for nbWinner != 0 {
-			s1 := rand.NewSource(time.Now().UnixNano())
-			r1 := rand.New(s1)
-			index := r1.Intn(len(result))
-			winners = append(winners, result[index].Profile)
-			nbWinner--
-		}
+	if nbWinner >= len(result) || nbWinner > len(winnerPreFetch)-1 {
+		totalattendees, _ := json.Marshal(result)
+		io.WriteString(w, string(totalattendees))
+		return
 	}
-	winner, _ := json.Marshal(winners)
-	w.Header().Set("Content-Type", "application/json")
-	io.WriteString(w, string(winner))
+	io.WriteString(w, winnerPreFetch[nbWinner])
+	go evictCache()
+}
+
+func evictCache() {
+	result, _ = getAttentees()
+	for i := 1; i < 10; i++ {
+		winnerPreFetch[i], _ = preFetchWinner(i)
+	}
 }
 
 func main() {
-	result, _ = getAttentees()
+	evictCache()
 	ticker := time.NewTicker(time.Hour)
 	go func() {
 		for t := range ticker.C {
