@@ -10,3 +10,4 @@ docker build -t winner-scratch ./
 ```
 docker run -p 8000:8000 --rm -e ORGA_ID='XXXXX' -e TOKEN='XXXXXXX' winner-scratch
 ``` 
+to run
