@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"math/rand"
@@ -11,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"time"
+	"log"
 )
 
 const (
@@ -27,9 +27,6 @@ const (
 	// If you want to expose some other headers add it here
 	headers string = "Accept, Accept-Encoding, Authorization, Content-Length, Content-Type, X-CSRF-Token"
 )
-
-var result []attendee
-var winnerPreFetch = make([]string, 10)
 
 // Handler will allow cross-origin HTTP requests
 func cors(next http.Handler) http.Handler {
@@ -60,6 +57,11 @@ func cors(next http.Handler) http.Handler {
 
 type event struct {
 	ID string `json:"id"`
+	Date start `json:"start"`
+}
+
+type start struct {
+	Utc string `json:"utc"`
 }
 
 type lastRequest struct {
@@ -83,38 +85,6 @@ type pagination struct {
 type eventAttend struct {
 	Attendees  []attendee `json:"attendees"`
 	Pagination pagination `json:"pagination"`
-}
-
-func getAttentees() ([]attendee, error) {
-	token := os.Getenv("TOKEN")
-	orgaID := os.Getenv("ORGA_ID")
-
-	resp, err := http.Get("https://www.eventbriteapi.com/v3/events/search/?token=" + token + "&organizer.id=" + orgaID)
-	if err != nil {
-		panic(err)
-	}
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	res := lastRequest{}
-	json.Unmarshal(body, &res)
-	if len(res.Events) == 0 {
-		return nil, errors.New("no event available")
-	}
-	var i = 1
-	var result = []attendee{}
-	for i != 0 {
-		resp, err := http.Get("https://www.eventbriteapi.com/v3/events/" + res.Events[0].ID + "/attendees/?page=" + strconv.Itoa(i) + "&token=" + token)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-		body, err := ioutil.ReadAll(resp.Body)
-		res := eventAttend{}
-		json.Unmarshal(body, &res)
-		result = append(result, res.Attendees...)
-		i = res.Pagination.PageCount - res.Pagination.PageNumber
-	}
-	return result, nil
 }
 
 func isPresent(index int, randoms []int) bool {
@@ -142,60 +112,185 @@ func getRandoms(nbWinner int) []int {
 	return randoms
 }
 
-func preFetchWinner(nbWinner int) (string, error) {
+func getWinners(attendees []attendee, nbWinner int) []profile {
 	var winnersProfile = []profile{}
-	randoms := getRandoms(len(result))
+	randoms := getRandoms(len(attendees))
 	for nbWinner != 0 {
-		winnersProfile = append(winnersProfile, result[randoms[nbWinner-1]].Profile)
+		winnersProfile = append(winnersProfile, attendees[randoms[nbWinner-1]].Profile)
 		nbWinner--
 	}
+	return winnersProfile
+}
+
+func preFetchWinner(nbWinner int, result []attendee) (string, error) {
+	winnersProfile := getWinners(result, nbWinner)
 	podium, _ := json.Marshal(winnersProfile)
 	return string(podium), nil
 }
 
-func winner(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	nbWinnerS := r.URL.Query().Get("nb")
-	if len(nbWinnerS) == 0 {
-		http.Error(w, "bad Request", http.StatusBadRequest)
-		return
-	}
-	nbWinner, err := strconv.Atoi(nbWinnerS)
+func winner(chanAttendees chan []attendee) func(http.ResponseWriter, *http.Request) {
+	var attendees []attendee
+	var winnerPreFetch = make([]string, 10)
 
-	if err != nil {
-		http.Error(w, "bad Request", http.StatusBadRequest)
-		return
+	go func() {
+		for {
+			attendees = <- chanAttendees
+			for i := 1; i < 10; i++ {
+				winnerPreFetch[i], _ = preFetchWinner(i, attendees)
+			}
+		}
+	}()
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		nbWinnerS := r.URL.Query().Get("nb")
+		if len(nbWinnerS) == 0 {
+			http.Error(w, "bad Request", http.StatusBadRequest)
+			return
+		}
+		nbWinner, err := strconv.Atoi(nbWinnerS)
+
+		if err != nil {
+			http.Error(w, "bad Request", http.StatusBadRequest)
+			return
+		}
+		if nbWinner < int(0) {
+			http.Error(w, "request < 0 ", http.StatusBadRequest)
+			return
+		}
+		if nbWinner >= len(attendees) || nbWinner > len(winnerPreFetch) - 1 {
+			n := nbWinner
+			if nbWinner >= len(attendees) {
+				n = len(attendees)
+			}
+			winnersProfile := getWinners(attendees, n)
+			totalattendees, _ := json.Marshal(winnersProfile)
+			io.WriteString(w, string(totalattendees))
+		} else {
+			io.WriteString(w, winnerPreFetch[nbWinner])
+		}
+
+		chanAttendees <- attendees
 	}
-	if nbWinner < int(0) {
-		http.Error(w, "request < 0 ", http.StatusBadRequest)
-		return
-	}
-	if nbWinner >= len(result) || nbWinner > len(winnerPreFetch)-1 {
-		totalattendees, _ := json.Marshal(result)
-		io.WriteString(w, string(totalattendees))
-		return
-	}
-	io.WriteString(w, winnerPreFetch[nbWinner])
-	go evictCache()
 }
 
-func evictCache() {
-	result, _ = getAttentees()
-	for i := 1; i < 10; i++ {
-		winnerPreFetch[i], _ = preFetchWinner(i)
+func getLastEvent() (*string, *time.Time, error) {
+	token := os.Getenv("TOKEN")
+	orgaID := "1464915124"
+
+	resp, err := http.Get("https://www.eventbriteapi.com/v3/events/search/?token=" + token + "&organizer.id=" + orgaID)
+	if err != nil {
+		return nil,nil, err
 	}
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil,nil, err
+	}
+
+	var request lastRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		return nil,nil, err
+	}
+
+	if len(request.Events) == 0 {
+		return nil,nil, errors.New("No event found")
+	}
+
+	date, err := time.Parse(time.RFC3339,request.Events[0].Date.Utc)
+	log.Println(date)
+	return &request.Events[0].ID, &date, nil
+}
+
+func getAttendees(lastEventID string) ([]attendee, error){
+	token := os.Getenv("TOKEN")
+	var i = 1
+	var result = []attendee{}
+	for {
+		log.Println("Fetch attendees")
+		log.Println("i:"+strconv.Itoa(i))
+		resp, err := http.Get("https://www.eventbriteapi.com/v3/events/" + lastEventID + "/attendees/?page=" + strconv.Itoa(i) + "&token=" + token)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		res := eventAttend{}
+		err = json.Unmarshal(body, &res)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, res.Attendees...)
+		log.Println("Page Count:" + strconv.Itoa(res.Pagination.PageCount))
+		log.Println("PageNumber:" + strconv.Itoa(res.Pagination.PageNumber))
+
+		if i == res.Pagination.PageCount {
+			break
+		}
+		i++
+	}
+	return result, nil
 }
 
 func main() {
-	evictCache()
-	ticker := time.NewTicker(time.Hour)
+	mux := http.NewServeMux()
+
+	lastEventId,lastEventDate, err := getLastEvent()
+	if err != nil {
+		log.Println(err)
+	}
+
+	log.Println("Event id: " + *lastEventId + " / Event date : "+ lastEventDate.String())
+
+	newEventID := make(chan string)
+	chanNewAttendees := make(chan []attendee)
+
+	go func () {
+		var eventID string
+		for {
+			var listAttendee []attendee
+			var err error
+			select {
+			case n := <-newEventID:
+				eventID = n
+				listAttendee, err = getAttendees(eventID)
+				if err != nil {
+					log.Println(err)
+				}
+				log.Println("List attendees : ")
+				log.Println(listAttendee)
+			case <-time.After(1 * time.Hour):
+				listAttendee, err = getAttendees(eventID)
+				if err != nil {
+					log.Println(err)
+				}
+				log.Println("List attendees : ")
+				log.Println(listAttendee)
+			}
+			chanNewAttendees <- listAttendee
+		}
+
+	}()
+	newEventID <- *lastEventId
+
 	go func() {
-		for t := range ticker.C {
-			fmt.Println("renew cache at ", t)
-			result, _ = getAttentees()
+		for range time.Tick(24 * time.Hour){
+			newLastEventId,lastEventDate, err := getLastEvent()
+			if err != nil {
+				log.Println(err)
+			}
+			log.Println(*lastEventId + " "+ lastEventDate.String())
+			if *newLastEventId != *lastEventId {
+				newEventID <- *newLastEventId
+			}
 		}
 	}()
-	mux := http.NewServeMux()
-	mux.HandleFunc("/winners", winner)
-	http.ListenAndServe(":8000", cors(mux))
+
+	mux.HandleFunc("/winners", winner(chanNewAttendees))
+	if err := http.ListenAndServe(":8000", cors(mux)); err != nil {
+		log.Println(err)
+	}
 }
